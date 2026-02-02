@@ -1,33 +1,80 @@
-name: Fetch Merchant Feed on merchant.xml change
+name: Update Google Merchant Feed
+
 on:
-  push:
-    paths:
-      - 'merchant.xml'
+  schedule:
+    # يشتغل كل ساعة (في الدقيقة 0)
+    - cron: '0 */1 * * *'  
+  
+  # لو عايز تجربه يدوياً
+  workflow_dispatch:
 
 jobs:
-  fetch-now:
+  update-feed:
     runs-on: ubuntu-latest
+    
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - id: auth
-        name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v1
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
         with:
-          credentials_json: ${{ secrets.SERVICE_ACCOUNT_JSON }}
-          token_format: 'access_token'
-          scopes: 'https://www.googleapis.com/auth/content'
-
-      - name: Call Merchant Center datafeeds.fetchNow
-        env:
-          MERCHANT_ID: ${{ secrets.MERCHANT_ID }}
-          DATAFEED_ID: ${{ secrets.DATAFEED_ID }}
-          ACCESS_TOKEN: ${{ steps.auth.outputs.access_token }}
+          node-version: '18'
+      
+      - name: Install dependencies
         run: |
-          echo "Calling fetchNow for feed $DATAFEED_ID (merchant $MERCHANT_ID)..."
-          resp=$(curl -s -o /dev/stderr -w "%{http_code}" \
-            -X POST "https://shoppingcontent.googleapis.com/content/v2.1/${MERCHANT_ID}/datafeeds/${DATAFEED_ID}/fetchNow" \
-            -H "Authorization: Bearer ${ACCESS_TOKEN}" \
-            -H "Content-Type: application/json")
-          echo "HTTP status: $resp"
+          npm init -y
+          npm install googleapis
+      
+      - name: Trigger Feed Fetch
+        env:
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
+          MERCHANT_ID: ${{ secrets.MERCHANT_ID }}
+        run: |
+          cat > fetch-feed.js << 'EOF'
+          const { google } = require('googleapis');
+          
+          async function fetchFeed() {
+            try {
+              const auth = new google.auth.JWT(
+                process.env.GOOGLE_CLIENT_EMAIL,
+                null,
+                process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+                ['https://www.googleapis.com/auth/content']
+              );
+              
+              const content = google.content({ version: 'v2.1', auth });
+              const merchantId = process.env.MERCHANT_ID;
+              
+              // جلب قائمة الفيدز
+              const feeds = await content.datafeeds.list({ merchantId });
+              
+              if (!feeds.data.resources || feeds.data.resources.length === 0) {
+                console.log('❌ No feeds found');
+                return;
+              }
+              
+              console.log(`✅ Found ${feeds.data.resources.length} feed(s)`);
+              
+              // تحديث كل فيد
+              for (const feed of feeds.data.resources) {
+                console.log(`Fetching feed: ${feed.name} (ID: ${feed.id})`);
+                await content.datafeeds.fetchnow({
+                  merchantId: merchantId,
+                  datafeedId: feed.id.toString()
+                });
+                console.log(`✅ Successfully fetched: ${feed.name}`);
+              }
+              
+              console.log('🎉 All feeds updated successfully!');
+            } catch (error) {
+              console.error('❌ Error:', error.message);
+              process.exit(1);
+            }
+          }
+          
+          fetchFeed();
+          EOF
+          
+          node fetch-feed.js
