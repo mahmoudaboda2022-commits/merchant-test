@@ -1,0 +1,85 @@
+name: Update Google Merchant Feed
+
+on:
+  schedule:
+    # يشتغل كل ساعة في الدقيقة 0
+    - cron: '0 * * * *'
+  
+  # لو عايز تجربه يدوياً
+  workflow_dispatch:
+
+jobs:
+  update-feed:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      
+      - name: Install googleapis
+        run: npm install googleapis
+      
+      - name: Trigger Feed Fetch
+        env:
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
+          MERCHANT_ID: ${{ secrets.MERCHANT_ID }}
+        run: |
+          cat > fetch-feed.js << 'EOF'
+          const { google } = require('googleapis');
+          
+          async function fetchFeed() {
+            try {
+              console.log('🔄 Starting feed fetch process...');
+              
+              const auth = new google.auth.JWT(
+                process.env.GOOGLE_CLIENT_EMAIL,
+                null,
+                process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+                ['https://www.googleapis.com/auth/content']
+              );
+              
+              const content = google.content({ version: 'v2.1', auth });
+              const merchantId = process.env.MERCHANT_ID;
+              
+              console.log(`📋 Fetching feeds for Merchant ID: ${merchantId}`);
+              
+              // جلب قائمة الفيدز
+              const feeds = await content.datafeeds.list({ merchantId });
+              
+              if (!feeds.data.resources || feeds.data.resources.length === 0) {
+                console.log('❌ No feeds found');
+                return;
+              }
+              
+              console.log(`✅ Found ${feeds.data.resources.length} feed(s)`);
+              
+              // تحديث كل فيد
+              for (const feed of feeds.data.resources) {
+                console.log(`\n🔄 Fetching feed: ${feed.name} (ID: ${feed.id})`);
+                await content.datafeeds.fetchnow({
+                  merchantId: merchantId,
+                  datafeedId: feed.id.toString()
+                });
+                console.log(`✅ Successfully fetched: ${feed.name}`);
+              }
+              
+              console.log('\n🎉 All feeds updated successfully!');
+            } catch (error) {
+              console.error('❌ Error:', error.message);
+              if (error.errors) {
+                console.error('Details:', JSON.stringify(error.errors, null, 2));
+              }
+              process.exit(1);
+            }
+          }
+          
+          fetchFeed();
+          EOF
+          
+          node fetch-feed.js
