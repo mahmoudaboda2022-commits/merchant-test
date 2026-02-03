@@ -21,26 +21,6 @@ jobs:
       - name: Install googleapis
         run: npm install googleapis
       
-      - name: Debug - Check Secrets
-        env:
-          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
-          GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
-          MERCHANT_ID: ${{ secrets.MERCHANT_ID }}
-        run: |
-          echo "=== DEBUG INFO ==="
-          echo "CLIENT_EMAIL exists: $([[ -n "$GOOGLE_CLIENT_EMAIL" ]] && echo 'YES' || echo 'NO')"
-          echo "CLIENT_EMAIL length: ${#GOOGLE_CLIENT_EMAIL}"
-          echo "CLIENT_EMAIL first 30 chars: ${GOOGLE_CLIENT_EMAIL:0:30}..."
-          echo ""
-          echo "PRIVATE_KEY exists: $([[ -n "$GOOGLE_PRIVATE_KEY" ]] && echo 'YES' || echo 'NO')"
-          echo "PRIVATE_KEY length: ${#GOOGLE_PRIVATE_KEY}"
-          echo "PRIVATE_KEY starts with: ${GOOGLE_PRIVATE_KEY:0:30}..."
-          echo "PRIVATE_KEY ends with: ...${GOOGLE_PRIVATE_KEY: -30}"
-          echo ""
-          echo "MERCHANT_ID exists: $([[ -n "$MERCHANT_ID" ]] && echo 'YES' || echo 'NO')"
-          echo "MERCHANT_ID value: $MERCHANT_ID"
-          echo "=================="
-      
       - name: Trigger Feed Fetch
         env:
           GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
@@ -55,36 +35,25 @@ jobs:
               console.log('🔄 Starting feed fetch process...');
               
               const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
-              const privateKey = process.env.GOOGLE_PRIVATE_KEY;
+              const privateKeyBase64 = process.env.GOOGLE_PRIVATE_KEY;
               const merchantId = process.env.MERCHANT_ID;
               
-              console.log('\n=== Environment Check ===');
-              console.log('CLIENT_EMAIL:', clientEmail ? 'EXISTS (length: ' + clientEmail.length + ')' : '❌ MISSING');
-              console.log('PRIVATE_KEY:', privateKey ? 'EXISTS (length: ' + privateKey.length + ')' : '❌ MISSING');
-              console.log('MERCHANT_ID:', merchantId || '❌ MISSING');
-              
-              if (!clientEmail) throw new Error('GOOGLE_CLIENT_EMAIL is missing');
-              if (!privateKey) throw new Error('GOOGLE_PRIVATE_KEY is missing');
-              if (!merchantId) throw new Error('MERCHANT_ID is missing');
-              
-              console.log('\n=== Private Key Format Check ===');
-              console.log('Starts with BEGIN:', privateKey.startsWith('-----BEGIN'));
-              console.log('Ends with END:', privateKey.includes('-----END'));
-              console.log('Contains \\n:', privateKey.includes('\\n'));
-              console.log('First 50 chars:', privateKey.substring(0, 50));
-              
-              // Try to format the key
-              let formattedKey = privateKey;
-              if (privateKey.includes('\\n')) {
-                console.log('Converting \\n to newlines...');
-                formattedKey = privateKey.replace(/\\n/g, '\n');
+              if (!clientEmail || !privateKeyBase64 || !merchantId) {
+                throw new Error('Missing required environment variables');
               }
               
-              console.log('\n=== Creating JWT Auth ===');
+              console.log('🔓 Decoding private key from base64...');
+              const privateKey = Buffer.from(privateKeyBase64, 'base64').toString('utf-8');
+              
+              console.log('✅ Private key decoded successfully');
+              console.log('📧 Client Email:', clientEmail);
+              console.log('🏪 Merchant ID:', merchantId);
+              
+              console.log('\n🔐 Creating JWT auth...');
               const auth = new google.auth.JWT(
                 clientEmail,
                 null,
-                formattedKey,
+                privateKey,
                 ['https://www.googleapis.com/auth/content']
               );
               
@@ -122,7 +91,6 @@ jobs:
               if (error.response?.data) {
                 console.error('Response:', JSON.stringify(error.response.data, null, 2));
               }
-              if (error.stack) console.error('Stack:', error.stack);
               process.exit(1);
             }
           }
