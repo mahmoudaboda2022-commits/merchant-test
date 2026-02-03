@@ -2,10 +2,7 @@ name: Update Google Merchant Feed
 
 on:
   schedule:
-    # يشتغل كل ساعة في الدقيقة 0
     - cron: '0 * * * *'
-  
-  # لو عايز تجربه يدوياً
   workflow_dispatch:
 
 jobs:
@@ -24,6 +21,26 @@ jobs:
       - name: Install googleapis
         run: npm install googleapis
       
+      - name: Debug - Check Secrets
+        env:
+          GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
+          GOOGLE_CLIENT_EMAIL: ${{ secrets.GOOGLE_CLIENT_EMAIL }}
+          MERCHANT_ID: ${{ secrets.MERCHANT_ID }}
+        run: |
+          echo "=== DEBUG INFO ==="
+          echo "CLIENT_EMAIL exists: $([[ -n "$GOOGLE_CLIENT_EMAIL" ]] && echo 'YES' || echo 'NO')"
+          echo "CLIENT_EMAIL length: ${#GOOGLE_CLIENT_EMAIL}"
+          echo "CLIENT_EMAIL first 30 chars: ${GOOGLE_CLIENT_EMAIL:0:30}..."
+          echo ""
+          echo "PRIVATE_KEY exists: $([[ -n "$GOOGLE_PRIVATE_KEY" ]] && echo 'YES' || echo 'NO')"
+          echo "PRIVATE_KEY length: ${#GOOGLE_PRIVATE_KEY}"
+          echo "PRIVATE_KEY starts with: ${GOOGLE_PRIVATE_KEY:0:30}..."
+          echo "PRIVATE_KEY ends with: ...${GOOGLE_PRIVATE_KEY: -30}"
+          echo ""
+          echo "MERCHANT_ID exists: $([[ -n "$MERCHANT_ID" ]] && echo 'YES' || echo 'NO')"
+          echo "MERCHANT_ID value: $MERCHANT_ID"
+          echo "=================="
+      
       - name: Trigger Feed Fetch
         env:
           GOOGLE_PRIVATE_KEY: ${{ secrets.GOOGLE_PRIVATE_KEY }}
@@ -37,19 +54,48 @@ jobs:
             try {
               console.log('🔄 Starting feed fetch process...');
               
+              const clientEmail = process.env.GOOGLE_CLIENT_EMAIL;
+              const privateKey = process.env.GOOGLE_PRIVATE_KEY;
+              const merchantId = process.env.MERCHANT_ID;
+              
+              console.log('\n=== Environment Check ===');
+              console.log('CLIENT_EMAIL:', clientEmail ? 'EXISTS (length: ' + clientEmail.length + ')' : '❌ MISSING');
+              console.log('PRIVATE_KEY:', privateKey ? 'EXISTS (length: ' + privateKey.length + ')' : '❌ MISSING');
+              console.log('MERCHANT_ID:', merchantId || '❌ MISSING');
+              
+              if (!clientEmail) throw new Error('GOOGLE_CLIENT_EMAIL is missing');
+              if (!privateKey) throw new Error('GOOGLE_PRIVATE_KEY is missing');
+              if (!merchantId) throw new Error('MERCHANT_ID is missing');
+              
+              console.log('\n=== Private Key Format Check ===');
+              console.log('Starts with BEGIN:', privateKey.startsWith('-----BEGIN'));
+              console.log('Ends with END:', privateKey.includes('-----END'));
+              console.log('Contains \\n:', privateKey.includes('\\n'));
+              console.log('First 50 chars:', privateKey.substring(0, 50));
+              
+              // Try to format the key
+              let formattedKey = privateKey;
+              if (privateKey.includes('\\n')) {
+                console.log('Converting \\n to newlines...');
+                formattedKey = privateKey.replace(/\\n/g, '\n');
+              }
+              
+              console.log('\n=== Creating JWT Auth ===');
               const auth = new google.auth.JWT(
-                process.env.GOOGLE_CLIENT_EMAIL,
+                clientEmail,
                 null,
-                process.env.GOOGLE_PRIVATE_KEY.replace(/\\n/g, '\n'),
+                formattedKey,
                 ['https://www.googleapis.com/auth/content']
               );
               
+              console.log('🔓 Attempting authorization...');
+              await auth.authorize();
+              console.log('✅ Authorization successful!');
+              
               const content = google.content({ version: 'v2.1', auth });
-              const merchantId = process.env.MERCHANT_ID;
               
-              console.log(`📋 Fetching feeds for Merchant ID: ${merchantId}`);
+              console.log(`\n📋 Fetching feeds for Merchant ID: ${merchantId}`);
               
-              // جلب قائمة الفيدز
               const feeds = await content.datafeeds.list({ merchantId });
               
               if (!feeds.data.resources || feeds.data.resources.length === 0) {
@@ -59,7 +105,6 @@ jobs:
               
               console.log(`✅ Found ${feeds.data.resources.length} feed(s)`);
               
-              // تحديث كل فيد
               for (const feed of feeds.data.resources) {
                 console.log(`\n🔄 Fetching feed: ${feed.name} (ID: ${feed.id})`);
                 await content.datafeeds.fetchnow({
@@ -71,10 +116,13 @@ jobs:
               
               console.log('\n🎉 All feeds updated successfully!');
             } catch (error) {
-              console.error('❌ Error:', error.message);
-              if (error.errors) {
-                console.error('Details:', JSON.stringify(error.errors, null, 2));
+              console.error('\n❌ ERROR OCCURRED:');
+              console.error('Message:', error.message);
+              if (error.code) console.error('Code:', error.code);
+              if (error.response?.data) {
+                console.error('Response:', JSON.stringify(error.response.data, null, 2));
               }
+              if (error.stack) console.error('Stack:', error.stack);
               process.exit(1);
             }
           }
